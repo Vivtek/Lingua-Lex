@@ -1,0 +1,6 @@
+eine        art
+kleine/a    aa
+rot/A       aa
+Musik       n
+Sache       n
+nopos

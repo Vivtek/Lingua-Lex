@@ -1,0 +1,11 @@
+Lingua-Lex
+
+Lingua::Lex is a Perl module for the management of lexical information, especially
+for use with the tokenizer of Lingua::Tok. Given a word as a string, Lingua::Lex
+returns a token consisting of a type (generally the part of speech) and the word.
+
+There are also some morphological mechanisms that allow a word to be identified
+based on affixes and a root; if this is the case, the token reflects this. Similarly,
+if the part of speech includes markers (plural, masculine, etc.), that's in the
+token as well.
+

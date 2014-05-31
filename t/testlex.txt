@@ -1,0 +1,23 @@
+words:
+eine        art
+kleine/a    aa
+rot/A       aa
+Musik       n
+Sache       n
+Ding        n
+nopos
+
+starts:
+Nacht
+
+suffixes:
+A: general adjective stuff
+aa  .       .   r   -f-n+m  a
+aa  [^e]    .   e   -m-n+f  a
+aa  .       .   er  +c      A
+
+a: masculine -er for e-ending words
+aa  .       e   er  -f-n+m  .
+
+L: -lich to test pos changes
+n   .       e   lich    aa  A

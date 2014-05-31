@@ -1,0 +1,22 @@
+Changes
+lib/Lingua/Lex.pm
+Makefile.PL
+MANIFEST			This list of files
+README
+t/00-load.t
+t/01-aareloading.t
+t/01-basic_lookup.t
+t/02-compounds.t
+t/03-suffixes.t
+t/04-ngrams.t
+t/05-loading.t
+t/manifest.t
+t/pod-coverage.t
+t/pod.t
+t/extra_words.txt
+t/load_lex.txt
+t/testlex.txt
+t/testdict/starts.txt
+t/testdict/suffixes.txt
+t/testdict/words/extra.txt
+t/testdict/words/words.txt
