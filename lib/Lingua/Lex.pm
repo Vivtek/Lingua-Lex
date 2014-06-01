@@ -260,23 +260,62 @@ sub word {
         $check->execute($word);
         my $ret = $check->fetchrow_hashref;
         if ($ret) {
+            next if $internal and $ret->{word} =~ /^\p{Upper}+$/ and $ret->{word} ne $word;
+                                                         # This is to prevent capitalized acronyms from acting as parts of words: vorher+IG+er for acronym IG
+                                                         # This might not be the best way to handle it; probably acronyms should be a different POS than just nouns.
             $ret->{word} = $word; # Make sure capitalization matches
             $self->{cache}->{$word} = $ret unless $internal;
             return $self->_returnval($ret);
         }
     }
 
-    # Check compounds
     #$self->status_message ("$word not found directly.\n");
+
+    # If the word has non-ASCII caps in it, let's try lower-casing it to get around the fact that COLLATE NOCASE
+    # doesn't work for UTF8 in SQLite.  (You're very right, this is not the way to do this. But it works for today.)
+    # TODO: provide a proper collation sequence for SQLite for each specific language, probably.
+    # TODO: also provide a better detection regex for capital non-ASCII letters than the one here.
+    if ($word =~ /[ÄÜÖÁÓÚÍÀÒÙÌ]/) {
+        my $lcword = lc($word);
+        #$self->status_message ("Could it be $lcword?");
+        my $lookup = $self->word($lcword, 1);
+        if ($lookup->[0] ne '?') {
+            return $self->_returnval($lookup);
+        }
+    }
+
     $self->{indirect}->{$word} = 1;
     my $word_length = length($word);
+
+    # Check prefixes
+    if ($self->{sql}->{prefixes}) {
+        $self->{sql}->{prefixes}->execute($word);
+        my @starts = ();
+        while (my $ret = $self->{sql}->{prefixes}->fetchrow_hashref) {
+            push @starts, $ret;
+        }
+        foreach my $start (@starts) { # Possible matches, longest to shortest
+            my $rest = substr($word, length($start->{word}), $word_length-length($start->{word}));
+            next if length($rest) < 2;
+            #$self->status_message ("Could it be " . $start->{word} . "+$rest?\n");
+            my $lookup = $self->word($rest, 1);
+            if ($lookup->[0] ne '?') {
+                $lookup->[1] = $word;
+                $lookup->[2] = $start->{word} . "+$rest";
+                $self->{cache}->{$word} = $lookup;
+                return $self->_returnval($lookup);
+            }
+        }
+    }
+    
+    # Check compounds
     if ($self->{sql}->{starts}) {
         $self->{sql}->{starts}->execute($word);
         my @starts = ();
         while (my $ret = $self->{sql}->{starts}->fetchrow_hashref) {
             push @starts, $ret;
         }
-        foreach my $start (@starts) { # Possible matches, longest to shortest
+        foreach my $start (@starts) {
             my $rest = substr($word, length($start->{word}), $word_length-length($start->{word}));
             next if length($rest) < 2;
             #$self->status_message ("Could it be " . $start->{word} . "+$rest?\n");
@@ -348,16 +387,54 @@ sub word_debug {
         $check->execute($word);
         my $ret = $check->fetchrow_hashref;
         if ($ret) {
+            next if $internal and $ret->{word} =! /^\p{Upper}+$/ and $ret->{word} ne $word;
+                                                         # This is to prevent capitalized acronyms from acting as parts of words: vorher+IG+er for acronym IG
+                                                         # This might not be the best way to handle it; probably acronyms should be a different POS than just nouns.
             $ret->{word} = $word; # Make sure capitalization matches
             $self->{cache}->{$word} = $ret unless $internal;
             return $self->_returnval($ret);
         }
     }
-
-    # Check compounds
     $self->status_message ("$word not found directly.\n");
+    
+    # If the word has non-ASCII caps in it, let's try lower-casing it to get around the fact that COLLATE NOCASE
+    # doesn't work for UTF8 in SQLite.  (You're very right, this is not the way to do this. But it works for today.)
+    # TODO: provide a proper collation sequence for SQLite for each specific language, probably.
+    # TODO: also provide a better detection regex for capital non-ASCII letters than the one here.
+    if ($word =~ /[ÄÜÖÁÓÚÍÀÒÙÌ]/) {
+        my $lcword = lc($word);
+        $self->status_message ("Could it be $lcword?");
+        my $lookup = $self->word_debug($lcword, 1);
+        if ($lookup->[0] ne '?') {
+            return $self->_returnval($lookup);
+        }
+    }
+
     $self->{indirect}->{$word} = 1;
     my $word_length = length($word);
+
+    # Check prefixes
+    if ($self->{sql}->{prefixes}) {
+        $self->{sql}->{prefixes}->execute($word);
+        my @starts = ();
+        while (my $ret = $self->{sql}->{prefixes}->fetchrow_hashref) {
+            push @starts, $ret;
+        }
+        foreach my $start (@starts) { # Possible matches, longest to shortest
+            my $rest = substr($word, length($start->{word}), $word_length-length($start->{word}));
+            next if length($rest) < 2;
+            $self->status_message ("Could it be (" . $start->{word} . ")+$rest?\n");
+            my $lookup = $self->word_debug($rest, 1);
+            if ($lookup->[0] ne '?') {
+                $lookup->[1] = $word;
+                $lookup->[2] = $start->{word} . "+$rest";
+                $self->{cache}->{$word} = $lookup;
+                return $self->_returnval($lookup);
+            }
+        }
+    }
+
+    # Check compounds
     if ($self->{sql}->{starts}) {
         $self->{sql}->{starts}->execute($word);
         my @starts = ();
@@ -367,7 +444,7 @@ sub word_debug {
         foreach my $start (@starts) { # Possible matches, longest to shortest
             my $rest = substr($word, length($start->{word}), $word_length-length($start->{word}));
             next if length($rest) < 2;
-            $self->status_message ("Could it be " . $start->{word} . "+$rest?\n");
+            $self->status_message ("Could it be (" . $start->{word} . ")+$rest?\n");
             my $lookup = $self->word_debug($rest, 1);
             if ($lookup->[0] ne '?') {
                 $lookup->[1] = $word;
@@ -394,7 +471,7 @@ sub word_debug {
             $rest .= $suff->{stem};
             next if length($rest) < 2;
             next if $self->{indirect}->{$rest};
-            $self->status_message ("Could it be $rest+" . $suff->{suffix} . "?\n");
+            $self->status_message ("Could it be $rest+(" . $suff->{suffix} . ")?\n");
             my $lookup = $self->word_debug($rest, 1);
             if ($lookup->[0] ne '?') {
                 $lookup->[0] = _modify_pos($lookup->[0], $lookup->[3], $suff->{pos});
