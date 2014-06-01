@@ -183,6 +183,7 @@ sub _handle_ngrams {
 sub _returnval {
     my $self = shift;
     my $hash = shift;
+    my $internal = shift;
 
     my $stop = 0;
     my $word;
@@ -205,10 +206,12 @@ sub _returnval {
         $pos  = $hash->[0];
         $stop = 1 if $self->{stop_pos}->{$pos};
     }
-    if ($stop) {
-        $self->stop;
-    } else {
-        $self->_handle_ngrams($word);
+    if (not $internal) {
+       if ($stop) {
+           $self->stop;
+       } else {
+           $self->_handle_ngrams($word);
+       }
     }
     return $hash if ref($hash) eq 'ARRAY';
     return [$pos, $word, $fullpos ? ($word, $fullpos) : ()];
@@ -255,7 +258,7 @@ sub word {
 
     $self->{stats}->{count}++ unless $internal;
     $self->{words}->{$word}++ unless $internal;
-    return $self->_returnval ($self->{cache}->{$word}) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
+    return $self->_returnval ($self->{cache}->{$word}, $internal) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
     foreach my $check (@{$self->{sql}->{words}}) {
         $check->execute($word);
         my $ret = $check->fetchrow_hashref;
@@ -265,7 +268,7 @@ sub word {
                                                          # This might not be the best way to handle it; probably acronyms should be a different POS than just nouns.
             $ret->{word} = $word; # Make sure capitalization matches
             $self->{cache}->{$word} = $ret unless $internal;
-            return $self->_returnval($ret);
+            return $self->_returnval($ret, $internal);
         }
     }
 
@@ -280,7 +283,7 @@ sub word {
         #$self->status_message ("Could it be $lcword?");
         my $lookup = $self->word($lcword, 1);
         if ($lookup->[0] ne '?') {
-            return $self->_returnval($lookup);
+            return $self->_returnval($lookup, $internal);
         }
     }
 
@@ -303,7 +306,7 @@ sub word {
                 $lookup->[1] = $word;
                 $lookup->[2] = $start->{word} . "+$rest";
                 $self->{cache}->{$word} = $lookup;
-                return $self->_returnval($lookup);
+                return $self->_returnval($lookup, $internal);
             }
         }
     }
@@ -324,7 +327,7 @@ sub word {
                 $lookup->[1] = $word;
                 $lookup->[2] = $start->{word} . "+$rest";
                 $self->{cache}->{$word} = $lookup;
-                return $self->_returnval($lookup);
+                return $self->_returnval($lookup, $internal);
             }
         }
     }
@@ -357,7 +360,7 @@ sub word {
                 $rest = $lookup->[2] if $lookup->[2];
                 $lookup->[2] = "$rest+" . $suff->{suffix};
                 $self->{cache}->{$word} = $lookup;
-                return $self->_returnval($lookup);
+                return $self->_returnval($lookup, $internal);
             }
         }
     }
@@ -382,7 +385,7 @@ sub word_debug {
 
     $self->{stats}->{count}++ unless $internal;
     $self->{words}->{$word}++ unless $internal;
-    return $self->_returnval ($self->{cache}->{$word}) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
+    return $self->_returnval ($self->{cache}->{$word}, $internal) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
     foreach my $check (@{$self->{sql}->{words}}) {
         $check->execute($word);
         my $ret = $check->fetchrow_hashref;
@@ -392,7 +395,7 @@ sub word_debug {
                                                          # This might not be the best way to handle it; probably acronyms should be a different POS than just nouns.
             $ret->{word} = $word; # Make sure capitalization matches
             $self->{cache}->{$word} = $ret unless $internal;
-            return $self->_returnval($ret);
+            return $self->_returnval($ret, $internal);
         }
     }
     $self->status_message ("$word not found directly.\n");
@@ -406,7 +409,7 @@ sub word_debug {
         $self->status_message ("Could it be $lcword?");
         my $lookup = $self->word_debug($lcword, 1);
         if ($lookup->[0] ne '?') {
-            return $self->_returnval($lookup);
+            return $self->_returnval($lookup, $internal);
         }
     }
 
@@ -429,7 +432,7 @@ sub word_debug {
                 $lookup->[1] = $word;
                 $lookup->[2] = $start->{word} . "+$rest";
                 $self->{cache}->{$word} = $lookup;
-                return $self->_returnval($lookup);
+                return $self->_returnval($lookup, $internal);
             }
         }
     }
@@ -450,7 +453,7 @@ sub word_debug {
                 $lookup->[1] = $word;
                 $lookup->[2] = $start->{word} . "+$rest";
                 $self->{cache}->{$word} = $lookup;
-                return $self->_returnval($lookup);
+                return $self->_returnval($lookup, $internal);
             }
         }
     }
@@ -483,7 +486,7 @@ sub word_debug {
                 $rest = $lookup->[2] if $lookup->[2];
                 $lookup->[2] = "$rest+" . $suff->{suffix};
                 $self->{cache}->{$word} = $lookup;
-                return $self->_returnval($lookup);
+                return $self->_returnval($lookup, $internal);
             }
         }
     }
