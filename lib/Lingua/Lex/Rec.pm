@@ -60,7 +60,7 @@ There are also several standard patterns that can be interspersed by name, so:
 =cut
 
 sub new {
-   my $self = bless [], $shift;
+   my $self = bless [], shift;
    my $r = shift @_;
    while (defined $r) {
       my $rf = ref($r);
@@ -87,7 +87,7 @@ sub word {
     my ($self, $word) = @_;
     foreach my $r (@{$self}) {
        my ($name, @matches) = @{$r};
-       foreach $match (@matches) {
+       foreach my $match (@matches) {
           my $rf = ref $match;
           if (!$rf) {
              return [$name, $word] if $word eq $match;
