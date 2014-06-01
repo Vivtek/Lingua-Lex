@@ -4,7 +4,9 @@ use 5.006;
 use strict;
 use warnings FATAL => 'all';
 #use DBD::SQLite;
+use Data::Dumper;
 use DBI qw(:sql_types);
+use utf8;
 use File::stat;
 use Carp;
 
@@ -133,9 +135,35 @@ languages.
 
 sub default_stoppos { (); }
 
-=head2 word
+=head2 status_message
 
-Looks up a word during the run.
+By default, this does nothing. If a status callback is installed with set_status_callback, though, it sends its arguments to
+that callback.  Status messages are primarily used during reloading to indicate what's going on.
+
+=cut
+
+sub status_message {
+    my $self = shift;
+    return unless defined $self->{status_callback};
+    $self->{status_callback}->(@_);
+}
+
+=head2 set_status_callback
+
+Sets the status message callback. This is a closure which expects one string as a message for display.
+
+=cut
+
+sub set_status_callback {
+    my $self = shift;
+    $self->{status_callback} = shift;
+}
+
+=head2 word, word_debug
+
+Looks up a word during the run. For purposes of debugging morphology, word_debug does the same thing but calls the status message
+callback with informative messages during the lookup process. Note that I<that> is a maintenance nightmare waiting to happen; these
+two functions must always be guaranteed to do the same thing, and I'm sure they won't, as soon as I depend on them to.
 
 =cut
 
@@ -221,6 +249,10 @@ sub word {
     my $internal = shift;
     croak "Lexicon not loaded or initialized" unless defined $self->{sql}->{words};
     
+    $self->{nonwords} = {} unless $internal;
+    $self->{indirect} = {} unless $internal;
+    return ['?', $word] if $internal and $self->{nonwords}->{$word};
+
     $self->{stats}->{count}++ unless $internal;
     $self->{words}->{$word}++ unless $internal;
     return $self->_returnval ($self->{cache}->{$word}) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
@@ -233,8 +265,10 @@ sub word {
             return $self->_returnval($ret);
         }
     }
-    
+
     # Check compounds
+    #$self->status_message ("$word not found directly.\n");
+    $self->{indirect}->{$word} = 1;
     my $word_length = length($word);
     if ($self->{sql}->{starts}) {
         $self->{sql}->{starts}->execute($word);
@@ -244,6 +278,8 @@ sub word {
         }
         foreach my $start (@starts) { # Possible matches, longest to shortest
             my $rest = substr($word, length($start->{word}), $word_length-length($start->{word}));
+            next if length($rest) < 2;
+            #$self->status_message ("Could it be " . $start->{word} . "+$rest?\n");
             my $lookup = $self->word($rest, 1);
             if ($lookup->[0] ne '?') {
                 $lookup->[1] = $word;
@@ -262,7 +298,15 @@ sub word {
             push @suffixes, $ret;
         }
         foreach my $suff (@suffixes) {
-            my $rest = substr($word, 0, $word_length-length($suff->{suffix})) . $suff->{stem};
+            next if length($suff->{suffix}) >= length($word);
+            my $rest = substr($word, 0, $word_length-length($suff->{suffix}));
+            next if length($rest) < 2;
+            # Do we match match?
+            next unless $rest =~ /$suff->{match}$/;
+            $rest .= $suff->{stem};
+            next if length($rest) < 2;
+            next if $self->{indirect}->{$rest};
+            #$self->status_message ("Could it be $rest+" . $suff->{suffix} . "?\n");
             my $lookup = $self->word($rest, 1);
             if ($lookup->[0] ne '?') {
                 $lookup->[0] = _modify_pos($lookup->[0], $lookup->[3], $suff->{pos});
@@ -279,6 +323,98 @@ sub word {
         }
     }
     
+    #$self->status_message ("$word is unknown.\n");
+    $self->{nonwords}->{$word} = 1 if $internal;
+    $self->{stats}->{ucount}++ unless $internal;
+    $self->{unknown}->{$word}++ unless $internal;
+    $self->_handle_ngrams($word) unless $internal;
+    return ['?', $word];
+}
+sub word_debug {
+    my $self = shift;
+    my $word = shift;
+    my $internal = shift;
+    croak "Lexicon not loaded or initialized" unless defined $self->{sql}->{words};
+    
+    $self->status_message ("Looking up $word\n");
+    $self->{nonwords} = {} unless $internal;
+    $self->{indirect} = {} unless $internal;
+    return ['?', $word] if $internal and $self->{nonwords}->{$word};
+
+    $self->{stats}->{count}++ unless $internal;
+    $self->{words}->{$word}++ unless $internal;
+    return $self->_returnval ($self->{cache}->{$word}) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
+    foreach my $check (@{$self->{sql}->{words}}) {
+        $check->execute($word);
+        my $ret = $check->fetchrow_hashref;
+        if ($ret) {
+            $ret->{word} = $word; # Make sure capitalization matches
+            $self->{cache}->{$word} = $ret unless $internal;
+            return $self->_returnval($ret);
+        }
+    }
+
+    # Check compounds
+    $self->status_message ("$word not found directly.\n");
+    $self->{indirect}->{$word} = 1;
+    my $word_length = length($word);
+    if ($self->{sql}->{starts}) {
+        $self->{sql}->{starts}->execute($word);
+        my @starts = ();
+        while (my $ret = $self->{sql}->{starts}->fetchrow_hashref) {
+            push @starts, $ret;
+        }
+        foreach my $start (@starts) { # Possible matches, longest to shortest
+            my $rest = substr($word, length($start->{word}), $word_length-length($start->{word}));
+            next if length($rest) < 2;
+            $self->status_message ("Could it be " . $start->{word} . "+$rest?\n");
+            my $lookup = $self->word_debug($rest, 1);
+            if ($lookup->[0] ne '?') {
+                $lookup->[1] = $word;
+                $lookup->[2] = $start->{word} . "+$rest";
+                $self->{cache}->{$word} = $lookup;
+                return $self->_returnval($lookup);
+            }
+        }
+    }
+    
+    # Check suffixes
+    if ($self->{sql}->{suffixes}) {
+        $self->{sql}->{suffixes}->execute($word, length($word)+1);
+        my @suffixes = ();
+        while (my $ret = $self->{sql}->{suffixes}->fetchrow_hashref) {
+            push @suffixes, $ret;
+        }
+        foreach my $suff (@suffixes) {
+            next if length($suff->{suffix}) >= length($word);
+            my $rest = substr($word, 0, $word_length-length($suff->{suffix}));
+            next if length($rest) < 2;
+            # Do we match match?
+            next unless $rest =~ /$suff->{match}$/;
+            $rest .= $suff->{stem};
+            next if length($rest) < 2;
+            next if $self->{indirect}->{$rest};
+            $self->status_message ("Could it be $rest+" . $suff->{suffix} . "?\n");
+            my $lookup = $self->word_debug($rest, 1);
+            if ($lookup->[0] ne '?') {
+                $lookup->[0] = _modify_pos($lookup->[0], $lookup->[3], $suff->{pos});
+                if ($lookup->[0] =~ /\+/) {
+                    $lookup->[3] = $lookup->[0];
+                    $lookup->[0] =~ s/\+.*//;
+                }
+                $lookup->[1] = $word;
+                $rest = $lookup->[2] if $lookup->[2];
+                $lookup->[2] = "$rest+" . $suff->{suffix};
+                $self->{cache}->{$word} = $lookup;
+                return $self->_returnval($lookup);
+            }
+        }
+    }
+
+    
+    
+    $self->status_message ("$word is unknown.\n");
+    $self->{nonwords}->{$word} = 1 if $internal;
     $self->{stats}->{ucount}++ unless $internal;
     $self->{unknown}->{$word}++ unless $internal;
     $self->_handle_ngrams($word) unless $internal;
@@ -462,38 +598,33 @@ sub _create_table {
     my ($self, $domain, $typed, $reload_only) = @_;
     my $table = $self->{domains}->{$domain};
     $self->{typed_domains}->{$domain} = $typed;
+
+    if ($reload_only) {
+        #$self->status_message ("Table for domain $domain already created.\n");
+    } else {
+        $self->status_message (sprintf "Creating and loading %s domain $domain.\n", $typed? 'typed':'non-typed');
+    }
     if ($domain eq 'words') {
         if (not $reload_only) {
             $self->{dbh}->do        ("drop table if exists $table");
             $self->{dbh}->do        ("drop index if exists ${table}_word");
             $self->{dbh}->do        (sprintf("create table $table (word varchar primary key, %s flags varchar, pos varchar)", $typed ? "type varchar," : ''));
             $self->{dbh}->do        ("create index ${table}_word on $table (word collate nocase)");
-            $self->{ins}->{words} =
-              $self->{dbh}->prepare (sprintf("insert into $table values (?, %s ?, ?)", $typed ? '?,' : ''));
         }
+        $self->{ins}->{words} =
+            $self->{dbh}->prepare (sprintf("insert into $table values (?, %s ?, ?)", $typed ? '?,' : ''));
         $self->{sql}->{words} =
           $self->{dbh}->prepare ("select * from $table where word=? collate nocase");
-    } elsif ($domain eq 'starts') {
-        if (not $reload_only) {
-            $self->{dbh}->do        ("drop table if exists $table");
-            $self->{dbh}->do        ("drop index if exists ${table}_word");
-            $self->{dbh}->do        (sprintf("create table $table (word varchar primary key, %s flags varchar, pos varchar)", $typed ? "type varchar," : ''));
-            $self->{dbh}->do        ("create index ${table}_word on $table (word collate nocase)");
-            $self->{ins}->{starts} =
-              $self->{dbh}->prepare (sprintf("insert into $table values (?, %s ?, ?)", $typed ? '?,' : ''));
-        }
-        $self->{sql}->{starts} =
-          $self->{dbh}->prepare ("select * from $table where word=substr(?,1,length(word)) collate nocase order by length(word) desc");
     } elsif ($domain eq 'prefixes') {
         if (not $reload_only) {
             $self->{dbh}->do        ("drop table if exists $table");
             $self->{dbh}->do        ("drop index if exists ${table}_word");
             $self->{dbh}->do        (sprintf("create table $table (word varchar primary key, %s flags varchar, pos varchar)", $typed ? "type varchar," : ''));
             $self->{dbh}->do        ("create index ${table}_word on $table (word collate nocase)");
-            $self->{ins}->{starts} =
-              $self->{dbh}->prepare (sprintf("insert into $table values (?, %s ?, ?)", $typed ? '?,' : ''));
         }
-        $self->{sql}->{starts} =
+        $self->{ins}->{prefixes} =
+          $self->{dbh}->prepare (sprintf("insert into $table values (?, %s ?, ?)", $typed ? '?,' : ''));
+        $self->{sql}->{prefixes} =
           $self->{dbh}->prepare ("select * from $table where word=substr(?,1,length(word)) collate nocase order by length(word) desc");
     } elsif ($domain eq 'suffixes') {
         if (not $reload_only) {
@@ -501,16 +632,30 @@ sub _create_table {
             $self->{dbh}->do        ("drop index if exists ${table}_suffix");
             $self->{dbh}->do        ("create table $table (flag varchar, matchpos varchar, match varchar, stem varchar, suffix varchar, pos varchar, chain varchar)");
             $self->{dbh}->do        ("create index ${table}_suffix on $table (suffix)");
-            $self->{ins}->{suffixes} =
-              $self->{dbh}->prepare ("insert into $table values (?, ?, ?, ?, ?, ?, ?)");
         }
+        $self->{ins}->{suffixes} =
+          $self->{dbh}->prepare ("insert into $table values (?, ?, ?, ?, ?, ?, ?)");
         $self->{sql}->{suffixes} =
           $self->{dbh}->prepare ("select * from $table where suffix=substr(?, ?-length(suffix), length(suffix)) order by length (suffix) desc, length(stem) asc");
+    } else { #'starts', 'ends', 'middles', etc.
+        if (not $reload_only) {
+            $self->{dbh}->do        ("drop table if exists $table");
+            $self->{dbh}->do        ("drop index if exists ${table}_word");
+            $self->{dbh}->do        (sprintf("create table $table (word varchar primary key, %s flags varchar, pos varchar)", $typed ? "type varchar," : ''));
+            $self->{dbh}->do        ("create index ${table}_word on $table (word collate nocase)");
+        }
+        $self->{ins}->{$domain} =
+          $self->{dbh}->prepare (sprintf("insert into $table values (?, %s ?, ?)", $typed ? '?,' : ''));
+        $self->{sql}->{$domain} =
+          $self->{dbh}->prepare ("select * from $table where word=substr(?,1,length(word)) collate nocase order by length(word) desc");
     }
 }
 sub _load_table {
     my ($self, $domain, $type, $import) = @_;
     open my $in, '<', $import or croak "Can't find input file $import";
+    my $short = $import;
+    $short =~ s/^.*\///;
+    $self->status_message (" $domain <-- $short\n");
     my $curflag = '';
     while (<$in>) {
         chomp;
@@ -613,6 +758,7 @@ sub load {
 sub _load_from_directory {
     my ($self, $directory) = @_;
     opendir D, $directory or croak "Can't open directory $directory";
+
     my @components = grep { not /^\./ and (-d "$directory/$_" or /\.txt$/) } readdir (D);
     closedir D;
     foreach my $c (@components) {
@@ -651,12 +797,11 @@ otherwise SQLite doesn't know what database file to compare file ages with, so w
 
 sub reload {
     my ($self, $where) = @_;
-    croak "No location specified" unless $where;
+
     croak "$where not found" unless -e $where;
-    croak "Can't reload externally loaded database before SQLite v1.39" unless $self->{db};
     
     my $type = 'file';
-    $type = 'directory' if -d $type;
+    $type = 'directory' if -d $where;
     
     return $self->load ($type => $where) if $self->{db_fresh};
     
@@ -691,7 +836,7 @@ sub reload {
         $self->{db_stat} = stat($self->{db});
         return;
     }
-    croak "Don't understand load type $type" unless $type eq 'directory';
+
     croak "$where is not a directory" unless -d $where;
     opendir D, $where or croak "Can't open directory $where";
     my @components = grep { not /^\./ and (-d "$where/$_" or /\.txt$/) } readdir (D);
@@ -711,7 +856,7 @@ sub reload {
                 my ($type) = $tyc =~ /^(.*)\.txt$/;
                 my $fs = stat("$where/$c/$tyc");
                 next unless $fs->mtime > $self->{db_stat}->mtime;
-                $sth->($type);
+                $sth->execute($type);
                 $self->_load_table($domain, $type, "$where/$c/$tyc");
             }
         } else {

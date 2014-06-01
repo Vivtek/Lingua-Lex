@@ -6,6 +6,7 @@ use Test::More;
 use Lingua::Lex;
 use DBI qw(:sql_types);
 use Data::Dumper;
+use utf8;
 
 #plan tests => 1;
 
