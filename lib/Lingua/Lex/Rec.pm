@@ -92,20 +92,23 @@ sub word {
           if (!$rf) {
              return [$name, $word] if $word eq $match;
           } elsif ($rf eq 'Regexp') {
-             my @returns = ($word =~ /^$match$/);
-             return [$name, @returns] if @returns;
+             #print STDERR "matching $word against $match\n";
+             next unless $word =~ /^$match$/;
+             my @ret = ($name, $word);
+             if (defined $1) {
+                @ret = (@ret, ($word =~ /^$match$/)); # I can't see any way to avoid calling this twice.
+             }
+             return \@ret;
           } elsif ($rf eq 'CODE') {
-             my $returns = $match->($word);
-             next unless defined $returns;
-             return [$name, $word, @$returns] if ref $returns eq 'ARRAY';
-             return [$name, $word];
+             my $return = $match->($word);
+             return $return if $return;
           }
        }
     }
     return undef;
 }
 
-=head2 standard_recognizer
+=head2 standard_recognizer, grouped_recognizers
 
 Looks up a standard recognizer by name.  The results of this are inserted into the list in the same point the name appeared, and a name
 can also refer to a specific group of other named or non-named recognizers.  For example, 'DATE' can refer to a 'DOTDATE' or a 'SLASHDATE'.
@@ -113,8 +116,100 @@ can also refer to a specific group of other named or non-named recognizers.  For
 =cut
 
 sub standard_recognizer {
+   my $self = shift;
+   my $r = shift;
+   
+   {
+      'COPY' => ['COPY', '©'],
+      'LSEC' => ['LSEC', '§', '§§'],
+      'NUM'  => ['NUM', qr/\d+/,
+                        qr/\d+([.,])\d+/,
+                        qr/\d[\d.]*/],
+      'DATE' => ['DATE', \&date_recognizer],
+      'URL'  => ['URL', \&url_recognizer],
+   }->{$r} || $self->grouped_recognizers($r);
 }
-    
+
+sub grouped_recognizers {
+   my $self = shift;
+   my $r = shift;
+   
+   my $group = {
+      'SPECIALS' => ['COPY', 'LSEC'],
+   }->{$r} || croak "Unknown recognizer $r";
+   @$group;
+}
+
+=head2 date_recognizer
+
+Given a string, decide whether it's a plausible date or not, and return a token if so. Also available as a standard recognizer
+named 'DATE'.
+
+The heuristics I'm using are that a 4-digit year should be between 1500 and 3000, and can be at the beginning (2014.01.01) or the
+end (01.01.2014). There's no good way without context to know whether the month or the day comes first, so we don't even try;
+the idea here is to make a good guess more or less as I would when looking at a document. A dotted date will probably end up
+miscategorized as a number in some cases, and a slashed date will generally be recognized correctly.
+
+=cut
+
+sub date_recognizer {
+   my $s = shift;
+   
+   return ['DATE', $s] if $s =~ /^\d+\/\d+\/\d+$/;
+   
+   if ($s =~ /^(\d+)\.(\d+)\.(\d+)$/) {
+      return ['DATE', $s] if $1 < 32 and $2 < 32 and $3 >= 1500 and $3 <= 3000;
+      return ['DATE', $s] if $3 < 32 and $2 < 32 and $1 >= 1500 and $1 <= 3000;
+   }
+   
+   return undef;
+}
+
+=head2 url_recognizer
+
+The "URL recognizer" will actually recognize not only URLs in http:... form, but also email addresses, and will make an attempt to
+judge anything obviously DNS-like, in that it looks like something.something.something, where the final something is a valid TLD
+according to L<Net::Domain::TLD> if it's installed, or .com, .org, .net, .gov, .mil, or two letters if not.
+
+   http://my.actual.url/this?query => ['URL', 'http://my.actual.url/this?query']
+   michael@vivtek.com              => ['EMAIL', 'michael@vivtek.com']
+   www.mybiddingsite.de            => ['URL', 'www.mybiddingsite.de']
+   
+Obviously, no effort at all will be made to check the technical correctness of any URL or email address here; we're just interested
+in making a rough guess as to whether a "word" (meaning a bunch of letters together without spaces) in a linguistic text
+"looks like" a URL or email address.  The further process is responsible for deciding what to do about these entities once
+they're found.
+
+=cut
+
+sub url_recognizer {
+   my $s = shift;
+   return ['URL', $s] if $s =~ /^[a-z]+:\/\/.+$/;
+   return ['URL', $s] if $s =~ /^mailto:[a-z]/;
+   return ['EMAIL', $s] if $s =~ /^[^@]+@[^@]+\..+$/;
+   return ['URL', $s] if $s =~ /^[a-z0-9.]+\.([a-z]+)/ and _valid_tld($1);
+   return undef;
+}
+sub _valid_tld {
+   my $tld = shift;
+   eval {
+      require Net::Domain::TLD;
+      Net::Domain::TLD->import('tld_exists');
+      return tld_exists($tld);
+   } or do {
+      return 1 if length($tld) eq 2;
+      {
+         'mil' => 1,
+         'org' => 1,
+         'com' => 1,
+         'net' => 1,
+         'gov' => 1,
+         'edu' => 1,
+         'info' => 1,
+      }->{$tld};
+   }
+}
+   
 
 =head1 AUTHOR
 
