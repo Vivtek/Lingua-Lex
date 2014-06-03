@@ -6,6 +6,8 @@ use warnings FATAL => 'all';
 #use DBD::SQLite;
 use Data::Dumper;
 use DBI qw(:sql_types);
+use Lingua::Lex::Rec;
+use Lingua::Lex::Cascade;
 use utf8;
 use File::stat;
 use Carp;
@@ -55,7 +57,7 @@ table to be used is fairly loose, but the key must be "word" and must obviously 
 Multiple tables can be specified by providing an arrayref; in this case, each table will be consulted
 in order and the first match will be returned.
 
-The C<ngrams> parameter indicates whether n-grams should be tracked along with words during the run;
+The C<ngrams_on> parameter indicates whether n-grams should be tracked along with words during the run;
 if so, set C<nmax> to indicate the maximum size of an n-gram. Each n-gram stops on a stopword boundary
 that the lexicon itself must detect based on its own lexical information. The tokenizer can also
 explicitly indicate a stop by calling C<stop> on the lexicon (usually based on punctuation, which is
@@ -74,7 +76,34 @@ the word is found.
 
 sub new {
     my $class = shift;
-    my $self = bless {@_}, $class;
+    
+    if (defined $_[0]) {
+        if ($_[0] eq 'rec') {#
+                  # or (ref($_[0]) eq 'HASH' ?
+                  #             ${$_[0]}->{rec} : '')) {
+            my $r = $_[1];
+            
+            return Lingua::Lex::Rec->new(ref $r eq 'ARRAY' ? @$r : $r);
+        }
+        if (ref($_[0]) eq 'HASH') {
+            my $a = $_[0];
+            if ($a->{rec} ) {
+                my $r = $a->{rec};
+                return Lingua::Lex::Rec->new(ref $r eq 'ARRAY' ? @$r : $r);
+            }
+        }
+    }
+
+    my $self;
+    if (defined $_[0] and ref $_[0] eq 'ARRAY') {
+        return Lingua::Lex::Cascade->new (@{$_[0]});
+    }
+
+    if (defined $_[0] and ref $_[0] eq 'HASH') {
+        $self = bless $_[0], $class;
+    } else {
+        $self = bless {@_}, $class;
+    }
 
     $self->{db_fresh} = 0;
     if ($self->{dbh} and not $self->{db}) {
@@ -96,15 +125,14 @@ sub new {
         $self->{sql}->{words} = [@sql];
         $self->{sql}->{starts}   = $self->{dbh}->prepare (sprintf ("select * from %s where word=substr(?,1,length(word)) order by length(word) desc", $self->{starts})) if $self->{starts};
         $self->{sql}->{suffixes} = $self->{dbh}->prepare (sprintf ("select * from %s where suffix=substr(?, ?-length(suffix), length(suffix)) order by length (suffix) desc, length(stem) asc", $self->{suffixes})) if $self->{suffixes};
-        $self->{stop_pos} = {};
     } elsif (defined $self->{load}) {
         $self->reload($self->{load});
-        $self->{stop_pos} = {};
     } elsif (defined $self->default_lexicon) {
         $self->reload($self->default_lexicon);
     }
     $self->{stop_pos} = {};
     $self->stop_on_pos($self->default_stoppos);
+    
     $self->restart;
     $self;
 }
@@ -170,7 +198,7 @@ two functions must always be guaranteed to do the same thing, and I'm sure they 
 sub _handle_ngrams {
     my $self = shift;
     my $word = shift;
-    return unless $self->{ngrams};
+    return unless $self->{ngrams_on};
     push @{$self->{currun}}, $word;
     shift @{$self->{currun}} if defined $self->{nmax} and @{$self->{currun}} > $self->{nmax};
     my $len = 2;
@@ -252,13 +280,14 @@ sub word {
     my $internal = shift;
     croak "Lexicon not loaded or initialized" unless defined $self->{sql}->{words};
     
+    $self->{stats}->{count}++ unless $internal;
+    $self->{words}->{$word}++ unless $internal;
+    return $self->_returnval ($self->{cache}->{$word}, $internal) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
+
     $self->{nonwords} = {} unless $internal;
     $self->{indirect} = {} unless $internal;
     return ['?', $word] if $internal and $self->{nonwords}->{$word};
 
-    $self->{stats}->{count}++ unless $internal;
-    $self->{words}->{$word}++ unless $internal;
-    return $self->_returnval ($self->{cache}->{$word}, $internal) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
     foreach my $check (@{$self->{sql}->{words}}) {
         $check->execute($word);
         my $ret = $check->fetchrow_hashref;
@@ -365,6 +394,7 @@ sub word {
         }
     }
     
+    WORD_UNKNOWN:
     #$self->status_message ("$word is unknown.\n");
     $self->{nonwords}->{$word} = 1 if $internal;
     $self->{stats}->{ucount}++ unless $internal;
@@ -372,20 +402,21 @@ sub word {
     $self->_handle_ngrams($word) unless $internal;
     return ['?', $word];
 }
+
 sub word_debug {
     my $self = shift;
     my $word = shift;
     my $internal = shift;
     croak "Lexicon not loaded or initialized" unless defined $self->{sql}->{words};
     
-    $self->status_message ("Looking up $word\n");
+    $self->{stats}->{count}++ unless $internal;
+    $self->{words}->{$word}++ unless $internal;
+    return $self->_returnval ($self->{cache}->{$word}, $internal) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
+
     $self->{nonwords} = {} unless $internal;
     $self->{indirect} = {} unless $internal;
     return ['?', $word] if $internal and $self->{nonwords}->{$word};
 
-    $self->{stats}->{count}++ unless $internal;
-    $self->{words}->{$word}++ unless $internal;
-    return $self->_returnval ($self->{cache}->{$word}, $internal) if defined $self->{cache}->{$word}; # Caching will hit twice for upper/lower case
     foreach my $check (@{$self->{sql}->{words}}) {
         $check->execute($word);
         my $ret = $check->fetchrow_hashref;
@@ -491,8 +522,6 @@ sub word_debug {
         }
     }
 
-    
-    
     $self->status_message ("$word is unknown.\n");
     $self->{nonwords}->{$word} = 1 if $internal;
     $self->{stats}->{ucount}++ unless $internal;
@@ -755,7 +784,6 @@ sub _load_line {
     s/u"/ü/g;
     s/sS/ß/g;
     s/e'/é/g;
-    s/--/\//g;
     if ($domain eq 'suffixes') {
         s/#.*$//;
         return unless $_;
@@ -774,6 +802,7 @@ sub _load_line {
     } else {
         my ($wthing, $pos) = split /\s+/;
         my ($word, $flags) = split /\//, $wthing;
+        $word =~ s/--/\//g;
 
         $flags = '' unless $flags;
         $pos   = '' unless $pos;
