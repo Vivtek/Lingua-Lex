@@ -127,6 +127,8 @@ sub standard_recognizer {
                         qr/\d[\d.]*/],
       'DATE' => ['DATE', \&date_recognizer],
       'URL'  => ['URL', \&url_recognizer],
+      'ID'   => ['ID',  qr/[a-z][a-z0-9_]*[0-9_][a-z0-9_]*/i],
+      'SPLIT' => ['SPLIT', \&punctuation_splitter],
    }->{$r} || $self->grouped_recognizers($r);
 }
 
@@ -150,14 +152,18 @@ end (01.01.2014). There's no good way without context to know whether the month 
 the idea here is to make a good guess more or less as I would when looking at a document. A dotted date will probably end up
 miscategorized as a number in some cases, and a slashed date will generally be recognized correctly.
 
+This will also recognize times as x:xx, xx:xx, xx:xx:xx, and dashed time ranges xx:xx-xx:xx, all with a token type of TIME.
+
 =cut
 
 sub date_recognizer {
    my $s = shift;
    
    return ['DATE', $s] if $s =~ /^\d+\/\d+\/\d+$/;
+   return ['TIME', $s] if $s =~ /^\d+:\d\d(:\d\d)?$/;
+   return ['TIME', $s] if $s =~ /^\d+:\d\d(:\d\d)?-\d+:\d\d(:\d\d)?$/;
    
-   if ($s =~ /^(\d+)\.(\d+)\.(\d+)$/) {
+   if ($s =~ /^(\d+)\.(\d+)\.(\d+)$/ || $s =~ /^(\d+)-(\d+)-(\d+)$/) {
       return ['DATE', $s] if $1 < 32 and $2 < 32 and $3 >= 1500 and $3 <= 3000;
       return ['DATE', $s] if $3 < 32 and $2 < 32 and $1 >= 1500 and $1 <= 3000;
    }
@@ -208,6 +214,24 @@ sub _valid_tld {
          'info' => 1,
       }->{$tld};
    }
+}
+
+=head2 punctuation_splitter
+
+A splitter is any lexical component that returns "SPLIT" as a token type; Lingua::Tok will take the rest of that token and unpop its components,
+thereby treating them as newly tokenized words before proceeding with the tokenization process. Lingua::Lex::Cascade will also not consider split
+tokens in its n-gram statistics.
+
+Note that a splitter is generally called I<after> the main lexica have had their chance to recognize a word - otherwise we'd never be able to
+recognize "and/or" or "e-mail" as words.
+
+=cut
+
+sub punctuation_splitter {
+   my $s = shift;
+   my @pieces = split /([\p{Punct}=])/, $s;
+   return undef if @pieces == 1;
+   return ['SPLIT', grep { $_ ne '' } @pieces];
 }
    
 
