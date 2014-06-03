@@ -1,5 +1,7 @@
 Changes
 lib/Lingua/Lex.pm
+lib/Lingua/Lex/Rec.pm
+lib/Lingua/Lex/Cascade.pm
 Makefile.PL
 MANIFEST			This list of files
 README
