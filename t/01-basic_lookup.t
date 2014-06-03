@@ -50,4 +50,12 @@ is_deeply ($tok, ['art', 'eine']);
 $tok = $lex->word('wordlist_word');
 is_deeply ($tok, ['word', 'wordlist_word']);
 
+# Build the lexicon from a hashref passed in
+$lex = Lingua::Lex->new ({dbh => $dbh, table=>['words']});
+
+$tok = $lex->word('eine');
+is_deeply ($tok, ['art', 'eine']);
+$tok = $lex->word('Eine');
+is_deeply ($tok, ['art', 'Eine']);
+
 done_testing();

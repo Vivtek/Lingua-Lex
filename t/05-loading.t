@@ -101,6 +101,15 @@ is_deeply ($tok, ['aa', 'sachlich', 'sache+lich']);  # Sache is a noun but '+lic
 undef $lex;
 unlink 't/dirtest.sqlt';
 
+# Load from 'new' call
+$lex = Lingua::Lex->new (db => 't/filetest.sqlt', load=>'t/load_lex.txt');
+
+$tok = $lex->word('eine');
+is_deeply ($tok, ['art', 'eine']);
+
+undef $lex;
+unlink 't/filetest.sqlt';
+
 
 done_testing();
 

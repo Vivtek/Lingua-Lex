@@ -4,6 +4,7 @@ use strict;
 use warnings FATAL => 'all';
 use Test::More;
 use Lingua::Lex::Rec;
+use Lingua::Lex;
 use Data::Dumper;
 use utf8;
 
@@ -78,5 +79,25 @@ $tok = $lex->word('www.mysite.com');
 is_deeply ($tok, ['URL', 'www.mysite.com']);
 $tok = $lex->word('something.else');
 ok (not defined $tok);
+
+# Creating a recognizer through ::Lex
+$lex = Lingua::Lex->new (rec => 'NUM');
+$tok = $lex->word ('99');
+is_deeply ($tok, ['NUM', '99']);
+
+$lex = Lingua::Lex->new (rec => ['DATE', 'NUM']);
+$tok = $lex->word('3.04.1989');
+is_deeply ($tok, ['DATE', '3.04.1989']);
+$tok = $lex->word ('99');
+is_deeply ($tok, ['NUM', '99']);
+
+# Test the basic splitter
+$lex = $lex = Lingua::Lex::Rec->new('SPLIT');
+$tok = $lex->word("oneword");
+ok (not defined $tok);
+$tok = $lex->word('muss"-Anforderung');
+#diag Dumper ($tok);
+is_deeply ($tok, ['SPLIT', 'muss', '"', '-', 'Anforderung']);
+
 
 done_testing();

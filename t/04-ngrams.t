@@ -12,7 +12,7 @@ use Data::Dumper;
 my $dbh = DBI->connect('dbi:SQLite:dbname=t/test.sqlt', '', '', {sqlite_unicode => 1})
                 or die "Couldn't connect to database: " . DBI->errstr;
                 
-my $lex = Lingua::Lex->new (dbh => $dbh, table=>['words'], ngrams=>'yes');
+my $lex = Lingua::Lex->new (dbh => $dbh, table=>['words'], ngrams_on=>'yes');
 $lex->stop_on_pos('art');
 
 $lex->word('rot');
